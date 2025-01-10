@@ -5,29 +5,16 @@ import queue
 import logging
 from typing import Dict, List, Callable
 
-
-class Observer(abc.ABC):
-    @abc.abstractmethod
-    def update(self, topic: str, message: str):
-        """Metoda Observer"""
-        pass
+from utils.mqtt_command import MQTTCommand
+from utils.observer import Observer
+from utils.singleton import Singleton
 
 
-class Singleton(type):
-    """class  Singleton"""
-    _instances = {}
+"""Przeniesone do utils"""
+# class Observer(abc.ABC):
+# class Singleton(type):
+# class MQTTCommand(abc.ABC):
 
-    def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            cls._instances[cls] = super().__call__(*args, **kwargs)
-        return cls._instances[cls]
-
-
-class MQTTCommand(abc.ABC):
-    @abc.abstractmethod
-    def execute(self, broker: 'MQTTBroker'):
-        """"""
-        pass
 
 
 class PublishCommand(MQTTCommand):
