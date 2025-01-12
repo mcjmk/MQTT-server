@@ -176,9 +176,9 @@ def main():
     import time
     time.sleep(0.5)
 
-    broker1.stop()
+    # broker1.stop()
 
-    print("IF broker1 same as broker2:", broker1 is broker2)
+    # print("IF broker1 same as broker2:", broker1 is broker2)
 
 
 if __name__ == "__main__":
