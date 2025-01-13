@@ -4,11 +4,11 @@ import asyncio
 import logging
 
 from connection.connection_handler import MQTTConnectionHandler
-
+from utils.singleton import Singleton
 
 from connection.broker import Broker
 
-class Server:
+class Server(metaclass=Singleton):
     def __init__(self, host='127.0.0.1', port=1884, authentication=False):
         self.host = host
         self.port = port

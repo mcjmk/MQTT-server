@@ -13,6 +13,7 @@ from authentication.user_auth import UserAuthenticator
 from authentication.device_pairing_manager import DevicePairingManager
 from authentication.user_auth import UserAccount
 from messages.publish import PublishMessage
+from utils.singleton import Singleton
 
 @dataclass
 class SessionData:
@@ -20,7 +21,7 @@ class SessionData:
     queued_messages: List[PublishMessage] = field(default_factory=list)
     queued_message_ids: Set[str] = field(default_factory=set)
 
-class Broker:
+class Broker(metaclass=Singleton):
     def __init__(self, authentication: bool = False):
         # Global subscription registry: topic -> set of StreamWriter objects
         self.subscriptions: defaultdict[str, Set[asyncio.StreamWriter]] = defaultdict(set)
