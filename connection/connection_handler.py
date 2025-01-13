@@ -2,14 +2,10 @@
 
 import asyncio
 import logging
-from messages.base import Message
 from messages.constants import MessageType
-from authentication.user_auth import UserAuthenticator
-from authentication.device_pairing_manager import DevicePairingManager
 
 from connection.broker import Broker
 from connection.commands import (
-    Command,
     ConnectCommand,
     SubscribeCommand,
     UnsubscribeCommand,
@@ -20,25 +16,7 @@ from connection.commands import (
     DisconnectCommand
 )
 
-from dataclasses import dataclass, field
-from typing import List, Set
-
-from messages import (
-    Message,
-    ConnectMessage, ConnAckMessage,
-    UnsubAckMessage, UnsubscribeMessage,
-    SubAckMessage, SubscribeMessage,
-    PublishMessage, PingReqMessage, PingRespMessage,
-    PubAckMessage, PubRecMessage, PubRelMessage, PubCompMessage,
-    DisconnectMessage,
-    Header
-)
-
-@dataclass
-class SessionData:
-    subscriptions: Set[str] = field(default_factory=set)
-    queued_messages: List[PublishMessage] = field(default_factory=list)
-    queued_message_ids: Set[str] = field(default_factory=set)
+from messages import Message
 
 class MQTTConnectionHandler:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, broker: Broker):

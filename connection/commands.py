@@ -1,37 +1,19 @@
 # connection/commands.py
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 import logging
 
 from messages.constants import MessageType
-from authentication.user_auth import UserAuthenticator
-from authentication.device_pairing_manager import DevicePairingManager
-from connection.broker import Broker
+from connection.broker import Broker, SessionData
 from messages import (
     ConnectMessage, ConnAckMessage,
     SubscribeMessage, SubAckMessage,
     UnsubscribeMessage, UnsubAckMessage,
     PublishMessage, PubAckMessage, PubRecMessage,
     PubRelMessage, PubCompMessage,
-    PingReqMessage, PingRespMessage,
-    DisconnectMessage,
+    PingRespMessage,
     Header
 )
-
-@dataclass
-class SessionData:
-    subscriptions: set = None
-    queued_messages: list = None
-    queued_message_ids: set = None
-
-    def __post_init__(self):
-        if self.subscriptions is None:
-            self.subscriptions = set()
-        if self.queued_messages is None:
-            self.queued_messages = []
-        if self.queued_message_ids is None:
-            self.queued_message_ids = set()
 
 class Command(ABC):
     def __init__(self, handler, message):
