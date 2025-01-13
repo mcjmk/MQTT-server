@@ -1,18 +1,25 @@
+# server.py (Comprehensive Revision)
+
 import asyncio
 from collections import defaultdict
 import logging
-from typing import Set
+from typing import Set, Dict, List
 
 from messages.base import MessageFactory
 from messages.constants import MessageType
 
 from messages import (
-    Message,  
-    ConnectMessage, ConnAckMessage, UnsubAckMessage, UnsubscribeMessage, SubAckMessage, SubscribeMessage,
-    PublishMessage, PingReqMessage, PingRespMessage, PubAckMessage, PubRecMessage, PubRelMessage, PubCompMessage,
+    Message,
+    ConnectMessage, ConnAckMessage,
+    UnsubAckMessage, UnsubscribeMessage,
+    SubAckMessage, SubscribeMessage,
+    PublishMessage, PingReqMessage, PingRespMessage,
+    PubAckMessage, PubRecMessage, PubRelMessage, PubCompMessage,
     DisconnectMessage,
     Header
 )
+
+from dataclasses import dataclass, field
 
 # Configure logging to include the timestamp, log level, and message
 logging.basicConfig(
@@ -26,13 +33,28 @@ subscriptions: defaultdict[str, Set[asyncio.StreamWriter]] = defaultdict(set)
 # Track each client's subscribed topics: StreamWriter -> set of topics
 client_subscriptions: defaultdict[asyncio.StreamWriter, Set[str]] = defaultdict(set)
 
+# Session registry: client_id -> SessionData
+@dataclass
+class SessionData:
+    subscriptions: Set[str] = field(default_factory=set)
+    queued_messages: List[PublishMessage] = field(default_factory=list)
+    queued_message_ids: Set[str] = field(default_factory=set)
+
+sessions: Dict[str, SessionData] = {}
+
+# Connected clients: client_id -> StreamWriter
+connected_clients: Dict[str, asyncio.StreamWriter] = {}
+
+# Reverse mapping: StreamWriter -> client_id
+writer_to_client_id: Dict[asyncio.StreamWriter, str] = {}
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     peer = writer.get_extra_info('peername')
     logging.info(f"New connection from {peer}")
 
     connected = True
-    client_id = None  # Will be set after CONNECT
+    client_id = None
+    clean_session = True  # Default to True
 
     while connected:
         try:
@@ -58,49 +80,121 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         # Handle each MQTT msg type
         # -------------------------
         if msg_type == MessageType.CONNECT:
-            # CONNECT → CONNACK
+            # Handle CONNECT message
             connect_msg = message  # type: ConnectMessage
             client_id = connect_msg.client_id
-            logging.info(f"[{peer}] CONNECT: client_id={client_id}")
+            clean_session = connect_msg.clean_session
+            logging.info(f"[{peer}] CONNECT: client_id={client_id}, clean_session={clean_session}")
 
-            # Build a CONNACK (return_code=0 => success)
+            if not clean_session:
+                # Resume or create session
+                if client_id in sessions:
+                    session = sessions[client_id]
+                    logging.info(f"[{peer}] Resuming existing session for client_id={client_id}")
+                else:
+                    session = SessionData()
+                    sessions[client_id] = session
+                    logging.info(f"[{peer}] Creating new session for client_id={client_id}")
+            else:
+                # Clean session: remove existing session if any
+                if client_id in sessions:
+                    del sessions[client_id]
+                    logging.info(f"[{peer}] Cleared existing session for client_id={client_id}")
+                session = SessionData()
+
+            # Check for existing connection and close it
+            if not clean_session and client_id in connected_clients:
+                old_writer = connected_clients[client_id]
+                old_peer = old_writer.get_extra_info('peername')
+                logging.info(f"[{peer}] Closing existing connection for client_id={client_id} from {old_peer}")
+
+                # Remove old writer from all subscriptions
+                if old_writer in client_subscriptions:
+                    for topic in client_subscriptions[old_writer]:
+                        subscriptions[topic].discard(old_writer)
+                        logging.info(f"[{old_peer}] Removed from topic '{topic}' subscriptions")
+                    del client_subscriptions[old_writer]
+
+                # Remove from writer_to_client_id
+                if old_writer in writer_to_client_id:
+                    del writer_to_client_id[old_writer]
+
+                # Close the old connection
+                old_writer.close()
+                await old_writer.wait_closed()
+                logging.info(f"[{peer}] Closed previous connection for client_id={client_id}")
+
+            # Mark client as connected
+            connected_clients[client_id] = writer
+            writer_to_client_id[writer] = client_id
+
+            # Send CONNACK
             header = Header(MessageType.CONNACK)
             connack = ConnAckMessage(header, session_present=0, return_code=0)
             writer.write(connack.pack())
             await writer.drain()
             logging.info(f"[{peer}] Sent CONNACK (session_present=0, return_code=0)")
 
+            # **Removed Queued Message Delivery from CONNECT**
+
         elif msg_type == MessageType.SUBSCRIBE:
-            # SUBSCRIBE → SUBACK
+            # Handle SUBSCRIBE message
             sub_msg = message  # type: SubscribeMessage
             logging.info(f"[{peer}] SUBSCRIBE: packet_id={sub_msg.packet_id}, topics={sub_msg.subscriptions}")
 
-            # Update the subscription registry
+            granted_qos = []
             for topic, qos in sub_msg.subscriptions:
-                subscriptions[topic].add(writer)
-                client_subscriptions[writer].add(topic)
-                logging.info(f"[{peer}] Subscribed to topic '{topic}' with QoS {qos}")
+                if topic not in client_subscriptions[writer]:
+                    subscriptions[topic].add(writer)
+                    client_subscriptions[writer].add(topic)
+                    granted_qos.append(qos)
+                    logging.info(f"[{peer}] Subscribed to topic '{topic}' with QoS {qos}")
 
-            # Respond with SUBACK (granted QoS same as requested for simplicity)
+                    # Add to session subscriptions
+                    if client_id and not clean_session:
+                        sessions[client_id].subscriptions.add(topic)
+                else:
+                    # Already subscribed, update QoS if needed
+                    granted_qos.append(qos)
+                    logging.info(f"[{peer}] Already subscribed to topic '{topic}', updated QoS to {qos}")
+
+            # Send SUBACK
             header = Header(MessageType.SUBACK)
-            return_codes = [qos for _, qos in sub_msg.subscriptions]
-            suback = SubAckMessage(header, sub_msg.packet_id, return_codes)
+            suback = SubAckMessage(header, sub_msg.packet_id, granted_qos)
             writer.write(suback.pack())
             await writer.drain()
             logging.info(f"[{peer}] Sent SUBACK for packet_id={sub_msg.packet_id}")
 
+            # **Deliver Queued Messages After SUBACK**
+            if client_id and not clean_session:
+                session = sessions.get(client_id)
+                if session and session.queued_messages:
+                    for queued_msg in session.queued_messages:
+                        writer.write(queued_msg.pack())
+                        await writer.drain()
+                        logging.info(f"[{peer}] Delivered queued message to topic '{queued_msg.topic}'")
+                    # Clear queued messages and their IDs after delivery
+                    session.queued_messages.clear()
+                    session.queued_message_ids.clear()
+
         elif msg_type == MessageType.UNSUBSCRIBE:
-            # UNSUBSCRIBE → UNSUBACK
+            # Handle UNSUBSCRIBE message
             unsub_msg = message  # type: UnsubscribeMessage
             logging.info(f"[{peer}] UNSUBSCRIBE: packet_id={unsub_msg.packet_id}, topics={unsub_msg.topics}")
 
-            # Update the subscription registry
             for topic in unsub_msg.topics:
-                subscriptions[topic].discard(writer)
-                client_subscriptions[writer].discard(topic)
-                logging.info(f"[{peer}] Unsubscribed from topic '{topic}'")
+                if topic in client_subscriptions[writer]:
+                    subscriptions[topic].discard(writer)
+                    client_subscriptions[writer].discard(topic)
+                    logging.info(f"[{peer}] Unsubscribed from topic '{topic}'")
 
-            # Respond with UNSUBACK
+                    # Remove from session subscriptions
+                    if client_id and not clean_session:
+                        sessions[client_id].subscriptions.discard(topic)
+                else:
+                    logging.info(f"[{peer}] Attempted to unsubscribe from non-subscribed topic '{topic}'")
+
+            # Send UNSUBACK
             header = Header(MessageType.UNSUBACK)
             unsuback = UnsubAckMessage(header, unsub_msg.packet_id)
             writer.write(unsuback.pack())
@@ -108,7 +202,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             logging.info(f"[{peer}] Sent UNSUBACK for packet_id={unsub_msg.packet_id}")
 
         elif msg_type == MessageType.PUBLISH:
-            # PUBLISH → Forward to subscribers based on topic
+            # Handle PUBLISH message
             publish_msg = message  # type: PublishMessage
             topic = publish_msg.topic
             payload = publish_msg.payload
@@ -121,27 +215,40 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
             logging.info(f"[{peer}] PUBLISH: topic='{topic}', payload='{payload_str}', QoS={qos}")
 
-            # Forward the PUBLISH to all subscribed clients except the sender
+            # Forward the PUBLISH to all connected subscribers except the sender
             if topic in subscriptions:
-                for subscriber in subscriptions[topic]:
+                for subscriber in list(subscriptions[topic]):
                     if subscriber != writer:
-                        try:
-                            # Reconstruct the PUBLISH message to send
-                            # You might want to modify the header (e.g., set DUP flag if needed)
-                            # For simplicity, using the same header and packet_id
-                            forwarded_publish = PublishMessage(
-                                header=publish_msg.header,
-                                topic=topic,
-                                packet_id=publish_msg.packet_id,
-                                payload=payload
-                            )
-                            subscriber.write(forwarded_publish.pack())
-                            await subscriber.drain()
-                            logging.info(f"[{peer}] Forwarded PUBLISH to {subscriber.get_extra_info('peername')}")
-                        except Exception as e:
-                            logging.error(f"Error forwarding PUBLISH to {subscriber.get_extra_info('peername')}: {e}")
+                        subscriber_client_id = writer_to_client_id.get(subscriber)
+
+                        if subscriber_client_id and subscriber_client_id in connected_clients:
+                            # Subscriber is connected
+                            try:
+                                subscriber.write(publish_msg.pack())
+                                await subscriber.drain()
+                                logging.info(f"[{peer}] Forwarded PUBLISH to {subscriber.get_extra_info('peername')}")
+                            except Exception as e:
+                                logging.error(f"Error forwarding PUBLISH to {subscriber.get_extra_info('peername')}: {e}")
             else:
-                logging.info(f"No subscribers for topic '{topic}'")
+                logging.info(f"No connected subscribers for topic '{topic}'")
+
+            # Iterate through all sessions to find offline subscribers subscribed to the topic
+            for offline_client_id, session in sessions.items():
+                if offline_client_id not in connected_clients and topic in session.subscriptions:
+                    # Queue the message based on QoS
+                    if qos in [1, 2]:
+                        # Generate a unique message_id
+                        message_id = f"{publish_msg.packet_id}-{topic}-{payload_str}"
+                        # Check if the message is already queued
+                        if not any(
+                            f"{msg.packet_id}-{msg.topic}-{msg.payload.decode('utf-8', 'ignore')}" == message_id
+                            for msg in session.queued_messages
+                        ):
+                            session.queued_messages.append(publish_msg)
+                            session.queued_message_ids.add(message_id)
+                            logging.info(f"[{peer}] Queued PUBLISH for offline client_id={offline_client_id}, topic='{topic}'")
+                        else:
+                            logging.info(f"[{peer}] PUBLISH already queued for client_id={offline_client_id}, topic='{topic}'")
 
             # Handle QoS acknowledgments
             if qos == 1:
@@ -161,12 +268,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 logging.info(f"[{peer}] Sent PUBREC for packet_id={publish_msg.packet_id}")
 
         elif msg_type == MessageType.PUBACK:
-            # Client is acknowledging a QoS=1 Publish we might have sent
+            # Handle PUBACK message
             puback_msg = message  # type: PubAckMessage
             logging.info(f"[{peer}] PUBACK: packet_id={puback_msg.packet_id}")
 
         elif msg_type == MessageType.PUBREC:
-            # Client is acknowledging a QoS=2 Publish (PUBREC)
+            # Handle PUBREC message
             pubrec_msg = message  # type: PubRecMessage
             logging.info(f"[{peer}] PUBREC: packet_id={pubrec_msg.packet_id}")
 
@@ -178,7 +285,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             logging.info(f"[{peer}] Sent PUBREL for packet_id={pubrec_msg.packet_id}")
 
         elif msg_type == MessageType.PUBREL:
-            # Client sending PUBREL for QoS=2
+            # Handle PUBREL message
             pubrel_msg = message  # type: PubRelMessage
             logging.info(f"[{peer}] PUBREL: packet_id={pubrel_msg.packet_id}")
 
@@ -190,22 +297,22 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             logging.info(f"[{peer}] Sent PUBCOMP for packet_id={pubrel_msg.packet_id}")
 
         elif msg_type == MessageType.PUBCOMP:
-            # Final QoS=2 acknowledgment
+            # Handle PUBCOMP message
             pubcomp_msg = message  # type: PubCompMessage
             logging.info(f"[{peer}] PUBCOMP: packet_id={pubcomp_msg.packet_id}")
 
         elif msg_type == MessageType.SUBACK:
-            # Typically client → server is unusual, just log
+            # Log unexpected SUBACK messages
             suback_msg = message  # type: SubAckMessage
             logging.info(f"[{peer}] SUBACK (unexpected as server): {suback_msg}")
 
         elif msg_type == MessageType.UNSUBACK:
-            # Typically client → server is unusual, just log
+            # Log unexpected UNSUBACK messages
             unsuback_msg = message  # type: UnsubAckMessage
             logging.info(f"[{peer}] UNSUBACK (unexpected as server): {unsuback_msg}")
 
         elif msg_type == MessageType.PINGREQ:
-            # PINGREQ → PINGRESP
+            # Respond with PINGRESP
             logging.info(f"[{peer}] PINGREQ")
             header = Header(MessageType.PINGRESP)
             pingresp = PingRespMessage(header)
@@ -214,28 +321,47 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             logging.info(f"[{peer}] Sent PINGRESP")
 
         elif msg_type == MessageType.PINGRESP:
-            # Typically client → server is unusual, just log
+            # Log unexpected PINGRESP messages
             logging.info(f"[{peer}] PINGRESP (unexpected as server)")
 
         elif msg_type == MessageType.DISCONNECT:
-            # DISCONNECT → Close connection
+            # Handle DISCONNECT message
             logging.info(f"[{peer}] DISCONNECT")
             connected = False
 
         else:
+            # Handle unknown/unsupported message types
             logging.info(f"[{peer}] Received unknown/unsupported message type={msg_type}")
 
-    # End of while loop: clean up subscriptions and close writer
-    if client_id and writer in client_subscriptions:
+    # After the while loop: handle session persistence and cleanup
+    if client_id:
+        if not clean_session:
+            # Persist session: update session data with current subscriptions
+            # Do NOT overwrite session.subscriptions
+            sessions[client_id] = sessions.get(client_id, SessionData())
+            logging.info(f"[{peer}] Persisted session for client_id={client_id}")
+        else:
+            # Clean session: remove any session data
+            if client_id in sessions:
+                del sessions[client_id]
+                logging.info(f"[{peer}] Removed session for client_id={client_id}")
+
+    # Remove writer from subscription registry
+    if writer in client_subscriptions:
         for topic in client_subscriptions[writer]:
             subscriptions[topic].discard(writer)
             logging.info(f"[{peer}] Removed from topic '{topic}' subscriptions")
         del client_subscriptions[writer]
 
+    # Remove client from connected clients
+    if client_id in connected_clients:
+        del connected_clients[client_id]
+    if writer in writer_to_client_id:
+        del writer_to_client_id[writer]
+
     writer.close()
     await writer.wait_closed()
     logging.info(f"Connection with {peer} closed.")
-
 
 async def main_server(host='127.0.0.1', port=1884):
     server = await asyncio.start_server(handle_client, host, port)
@@ -243,7 +369,6 @@ async def main_server(host='127.0.0.1', port=1884):
     logging.info(f"Server listening on {addr}")
     async with server:
         await server.serve_forever()
-
 
 if __name__ == '__main__':
     try:
