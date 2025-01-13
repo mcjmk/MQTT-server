@@ -49,7 +49,7 @@ class DevicePairingManager:
         return device_id in self.authenticator.users[username].paired_devices
 
     def is_topic_authorized(self, username: str, topic: str) -> bool:
-        print("hello", username, topic, self.authenticator.users[username].authorized_topics)
+        # print("hello", username, topic, self.authenticator.users[username].authorized_topics)
         if username not in self.authenticator.users:
             return False
         return topic in self.authenticator.users[username].authorized_topics

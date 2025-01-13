@@ -48,6 +48,20 @@ class Broker:
             self.authenticator = None
             self.device_manager = None
 
+    def register_user(self, username: str, password: str) -> bool:
+        """
+        Registers a new user with the given username and password.
+        """
+        success = self.authenticator.register(username, password)
+        return success
+
+    def authorize_topic(self, username: str, topic: str) -> bool:
+        """
+        Authorizes a user to access a specific topic.
+        """
+        success = self.device_manager.authorize_topic(username, topic)
+        return success
+    
     def get_user_data_path(self) -> Path:
         """
         Returns the absolute Path object to the users.json file.
