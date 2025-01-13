@@ -25,6 +25,7 @@ async def main():
     # Disconnect
     await client.disconnect()
     
+    
     # Cancel the listening task if still running
     listen_task.cancel()
     try:
