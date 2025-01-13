@@ -3,9 +3,9 @@
 import asyncio
 import logging
 
+from messages.base import MessageType
 from messages import (
     Message,
-    MessageType,
     Header,
     ConnectMessage, ConnAckMessage,
     SubscribeMessage, SubAckMessage,
