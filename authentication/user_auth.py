@@ -5,6 +5,9 @@ from typing import Dict, List
 
 import bcrypt
 
+from utils.singleton import Singleton
+
+
 @dataclass
 class Users:
     Users_User: str
@@ -34,7 +37,7 @@ class UserAccount:
             self.logger.error(f"Password verification failed: {e}")
             return False
 
-class UserAuthenticator:
+class UserAuthenticator(metaclass=Singleton):
     def __init__(self, save_callback=None):
         self.users: Dict[str, UserAccount] = {}
         self.logger = logging.getLogger('UserAuthenticator')

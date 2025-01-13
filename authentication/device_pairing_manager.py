@@ -2,11 +2,13 @@
 
 import logging
 from typing import Dict
-from authentication.user_auth import UserAccount, UserAuthenticator 
+from authentication.user_auth import UserAccount, UserAuthenticator
+from utils.singleton import Singleton
+
 
 # authentication/device_pairing_manager.py
 
-class DevicePairingManager:
+class DevicePairingManager(metaclass=Singleton):
     def __init__(self, authenticator: UserAuthenticator, save_callback=None):
         """
         Initialize with a reference to the UserAuthenticator and a save callback.
