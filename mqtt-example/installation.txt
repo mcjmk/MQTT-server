@@ -1,0 +1,11 @@
+# 1) Create a virtual environment in the current directory
+python -m venv venv
+
+# 2) Activate the virtual environment
+#   - On Windows:
+. venv/Scripts/activate
+#   - On macOS/Linux:
+source venv/bin/activate
+
+# 3)
+pip install path/filename.whl

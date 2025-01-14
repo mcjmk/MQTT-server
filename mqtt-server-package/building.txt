@@ -1,0 +1,20 @@
+# 1) Create venv
+python -m venv venv
+
+# 2) Activate venv:
+Windows:
+. venv/Scripts/activate
+
+Linux/Mac:
+source venv/bin/activate
+
+
+# 3) Install packaging tools:
+pip install --upgrade pip setuptools wheel
+
+# 4) Building package:
+python setup.py sdist bdist_wheel
+
+
+# 5) Later usage:
+pip install some_path_to/dist/my_package-0.1.0-py3-none-any.whl
