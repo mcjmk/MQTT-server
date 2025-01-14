@@ -19,4 +19,3 @@ class MessageType(IntEnum):
     PINGREQ = 12
     PINGRESP = 13
     DISCONNECT = 14
-    # PUBxxx messages beyond scope if you need them fully (PUBREC, PUBREL, etc.)
